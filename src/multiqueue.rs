@@ -27,7 +27,7 @@ extern crate parking_lot;
 extern crate smallvec;
 
 use self::futures::{Async, AsyncSink, Poll, Sink, Stream, StartSend};
-use self::futures::task::{park, Task};
+use self::futures::task::{self, Task};
 
 use self::atomic_utilities::artificial_dep::{dependently_mut, DepOrd};
 
@@ -890,7 +890,7 @@ impl FutWait {
         if check(seq, at, wc) {
             return false;
         }
-        parked.push_back(park());
+        parked.push_back(task::current());
         return true;
     }
 
@@ -916,7 +916,7 @@ impl FutWait {
         let mut parked = self.parked.lock();
         match f(val) {
             Err(TrySendError::Full(v)) => {
-                parked.push_back(park());
+                parked.push_back(task::current());
                 return Err(TrySendError::Full(v));
             }
             v => return v,
@@ -926,7 +926,7 @@ impl FutWait {
     fn notify_all(&self) {
         let mut parked = self.parked.lock();
         for val in parked.drain(..) {
-            val.unpark();
+            val.notify();
         }
     }
 }
@@ -942,14 +942,14 @@ impl Wait for FutWait {
         if parked.len() > 0 {
             if parked.len() > 8 {
                 for val in parked.drain(..) {
-                    val.unpark();
+                    val.notify();
                 }
             } else {
                 let mut inline_v = smallvec::SmallVec::<[Task; 9]>::new();
                 inline_v.extend(parked.drain(..));
                 drop(parked);
                 for val in inline_v.drain() {
-                    val.unpark();
+                    val.notify();
                 }
             }
         }
